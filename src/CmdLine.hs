@@ -23,6 +23,7 @@ import Language.Haskell.Exts.Extension
 import Data.Maybe
 import System.Environment.Extra
 import System.Info.Extra
+import Text.Regex (Regex(), mkRegex, matchRegex)
 
 import Util
 import Paths_hlint
@@ -108,6 +109,7 @@ data Cmd
         ,cmdRefactor :: Bool            -- ^ Run the `refactor` executable to automatically perform hints
         ,cmdRefactorOptions :: String   -- ^ Options to pass to the `refactor` executable.
         ,cmdWithRefactor :: FilePath    -- ^ Path to refactor tool
+        ,cmdIgnoreRegex :: String
         }
     | CmdGrep
         {cmdFiles :: [FilePath]    -- ^ which files to run it on, nothing = none given
@@ -167,6 +169,7 @@ mode = cmdArgsMode $ modes
         ,cmdRefactor = nam_ "refactor" &= help "Automatically invoke `refactor` to apply hints"
         ,cmdRefactorOptions = nam_ "refactor-options" &= typ "OPTIONS" &= help "Options to pass to the `refactor` executable"
         , cmdWithRefactor = nam_ "with-refactor" &= help "Give the path to refactor"
+        ,cmdIgnoreRegex = nam_ "ignore-regex" &= help "Ignore paths matching regular expression"
         } &= auto &= explicit &= name "lint"
     ,CmdGrep
         {cmdFiles = def &= args &= typ "FILE/DIR"
@@ -247,19 +250,21 @@ resolveFile
     -> Maybe FilePath -- ^ Temporary file
     -> FilePath       -- ^ File to resolve, may be "-" for stdin
     -> IO [FilePath]
-resolveFile cmd = getFile (cmdPath cmd) (cmdExtension cmd)
+resolveFile cmd p = getFile (mkRegex (cmdIgnoreRegex cmd)) (cmdPath cmd) (cmdExtension cmd) p
 
+testRegex :: Regex -> String -> Bool
+testRegex r s = case matchRegex r s of Nothing -> False ; Just{} -> True
 
-getFile :: [FilePath] -> [String] -> Maybe FilePath -> FilePath -> IO [FilePath]
-getFile path _ (Just tmpfile) "-" =
+getFile :: Regex -> [FilePath] -> [String] -> Maybe FilePath -> FilePath -> IO [FilePath]
+getFile _ignoreRegex path _ (Just tmpfile) "-" =
   getContents >>= writeFile tmpfile >> return [tmpfile]
-getFile path _ Nothing "-" = return ["-"]
-getFile [] exts _ file = exitMessage $ "Couldn't find file: " ++ file
-getFile (p:ath) exts t file = do
+getFile _ignoreRegex path _ Nothing "-" = return ["-"]
+getFile _ignoreRegex [] exts _ file = exitMessage $ "Couldn't find file: " ++ file
+getFile ignoreRegex  (p:ath) exts t file = do
     isDir <- doesDirectoryExist $ p <\> file
     if isDir then do
         let avoidDir x = let y = takeFileName x in "_" `isPrefixOf` y || ("." `isPrefixOf` y && not (all (== '.') y))
-            avoidFile x = let y = takeFileName x in "." `isPrefixOf` y
+            avoidFile x = let y = takeFileName x in "." `isPrefixOf` y || testRegex ignoreRegex x
         xs <- listFilesInside (return . not . avoidDir) $ p <\> file
         return [x | x <- xs, drop 1 (takeExtension x) `elem` exts, not $ avoidFile x]
      else do
@@ -269,7 +274,7 @@ getFile (p:ath) exts t file = do
             res <- getModule p exts file
             case res of
                 Just x -> return [x]
-                Nothing -> getFile ath exts t file
+                Nothing -> getFile ignoreRegex ath exts t file
 
 
 getModule :: FilePath -> [String] -> FilePath -> IO (Maybe FilePath)
