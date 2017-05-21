@@ -23,12 +23,11 @@ import Language.Haskell.Exts.Extension
 import Data.Maybe
 import System.Environment.Extra
 import System.Info.Extra
-import Text.Regex (Regex(), mkRegex, matchRegex)
+import qualified System.FilePath.Glob as Glob
 
 import Util
 import Paths_hlint
 import Data.Version
-
 
 getCmd :: [String] -> IO Cmd
 getCmd args = withArgs (map f args) $ automatic =<< cmdArgsRun mode
@@ -109,7 +108,7 @@ data Cmd
         ,cmdRefactor :: Bool            -- ^ Run the `refactor` executable to automatically perform hints
         ,cmdRefactorOptions :: String   -- ^ Options to pass to the `refactor` executable.
         ,cmdWithRefactor :: FilePath    -- ^ Path to refactor tool
-        ,cmdIgnoreRegex :: Maybe String
+        ,cmdIgnoreGlob :: Maybe String
         }
     | CmdGrep
         {cmdFiles :: [FilePath]    -- ^ which files to run it on, nothing = none given
@@ -169,7 +168,7 @@ mode = cmdArgsMode $ modes
         ,cmdRefactor = nam_ "refactor" &= help "Automatically invoke `refactor` to apply hints"
         ,cmdRefactorOptions = nam_ "refactor-options" &= typ "OPTIONS" &= help "Options to pass to the `refactor` executable"
         , cmdWithRefactor = nam_ "with-refactor" &= help "Give the path to refactor"
-        ,cmdIgnoreRegex = nam_ "ignore-regex" &= help "Ignore paths matching regular expression"
+        ,cmdIgnoreGlob = nam_ "ignore-glob" &= help "Ignore paths matching glob expression"
         } &= auto &= explicit &= name "lint"
     ,CmdGrep
         {cmdFiles = def &= args &= typ "FILE/DIR"
@@ -252,17 +251,14 @@ resolveFile
     -> IO [FilePath]
 resolveFile cmd p
   = getFile
-  (ignore $ cmdIgnoreRegex cmd)
+  (ignore $ cmdIgnoreGlob cmd)
   (cmdPath cmd)
   (cmdExtension cmd)
   p
   where
     ignore :: Maybe String -> FilePath -> Bool
     ignore Nothing _ = False
-    ignore (Just re) p = testRegex (mkRegex re) p
-
-testRegex :: Regex -> String -> Bool
-testRegex r s = case matchRegex r s of Nothing -> False ; Just{} -> True
+    ignore (Just expr) p = Glob.match (Glob.compile expr) p
 
 getFile :: (FilePath -> Bool) -> [FilePath] -> [String] -> Maybe FilePath -> FilePath -> IO [FilePath]
 getFile _ path _ (Just tmpfile) "-" =
