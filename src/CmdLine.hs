@@ -109,7 +109,7 @@ data Cmd
         ,cmdRefactor :: Bool            -- ^ Run the `refactor` executable to automatically perform hints
         ,cmdRefactorOptions :: String   -- ^ Options to pass to the `refactor` executable.
         ,cmdWithRefactor :: FilePath    -- ^ Path to refactor tool
-        ,cmdIgnoreRegex :: String
+        ,cmdIgnoreRegex :: Maybe String
         }
     | CmdGrep
         {cmdFiles :: [FilePath]    -- ^ which files to run it on, nothing = none given
@@ -250,21 +250,30 @@ resolveFile
     -> Maybe FilePath -- ^ Temporary file
     -> FilePath       -- ^ File to resolve, may be "-" for stdin
     -> IO [FilePath]
-resolveFile cmd p = getFile (mkRegex (cmdIgnoreRegex cmd)) (cmdPath cmd) (cmdExtension cmd) p
+resolveFile cmd p
+  = getFile
+  (ignore $ cmdIgnoreRegex cmd)
+  (cmdPath cmd)
+  (cmdExtension cmd)
+  p
+  where
+    ignore :: Maybe String -> FilePath -> Bool
+    ignore Nothing _ = False
+    ignore (Just re) p = testRegex (mkRegex re) p
 
 testRegex :: Regex -> String -> Bool
 testRegex r s = case matchRegex r s of Nothing -> False ; Just{} -> True
 
-getFile :: Regex -> [FilePath] -> [String] -> Maybe FilePath -> FilePath -> IO [FilePath]
-getFile _ignoreRegex path _ (Just tmpfile) "-" =
+getFile :: (FilePath -> Bool) -> [FilePath] -> [String] -> Maybe FilePath -> FilePath -> IO [FilePath]
+getFile _ path _ (Just tmpfile) "-" =
   getContents >>= writeFile tmpfile >> return [tmpfile]
-getFile _ignoreRegex path _ Nothing "-" = return ["-"]
-getFile _ignoreRegex [] exts _ file = exitMessage $ "Couldn't find file: " ++ file
-getFile ignoreRegex  (p:ath) exts t file = do
+getFile _ path _ Nothing "-" = return ["-"]
+getFile _ [] exts _ file = exitMessage $ "Couldn't find file: " ++ file
+getFile ignore  (p:ath) exts t file = do
     isDir <- doesDirectoryExist $ p <\> file
     if isDir then do
         let avoidDir x = let y = takeFileName x in "_" `isPrefixOf` y || ("." `isPrefixOf` y && not (all (== '.') y))
-            avoidFile x = let y = takeFileName x in "." `isPrefixOf` y || testRegex ignoreRegex x
+            avoidFile x = let y = takeFileName x in "." `isPrefixOf` y || ignore x
         xs <- listFilesInside (return . not . avoidDir) $ p <\> file
         return [x | x <- xs, drop 1 (takeExtension x) `elem` exts, not $ avoidFile x]
      else do
@@ -274,7 +283,7 @@ getFile ignoreRegex  (p:ath) exts t file = do
             res <- getModule p exts file
             case res of
                 Just x -> return [x]
-                Nothing -> getFile ignoreRegex ath exts t file
+                Nothing -> getFile ignore ath exts t file
 
 
 getModule :: FilePath -> [String] -> FilePath -> IO (Maybe FilePath)
